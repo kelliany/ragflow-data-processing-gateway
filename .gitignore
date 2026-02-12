@@ -1,0 +1,37 @@
+# 通用忽略规则
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Node.js 项目 (admin-gateway)
+admin-gateway/node_modules/
+admin-gateway/.env
+admin-gateway/npm-debug.log*
+admin-gateway/yarn-debug.log*
+admin-gateway/yarn-error.log*
+admin-gateway/package-lock.json
+admin-gateway/yarn.lock
+
+# Python 项目 (excel-processor)
+excel-processor/__pycache__/
+excel-processor/*.py[cod]
+excel-processor/*$py.class
+excel-processor/venv/
+excel-processor/.env
+excel-processor/*.egg-info/
+excel-processor/dist/
+excel-processor/build/
+
+# Docker
+.dockerignore
+
+# IDE 配置
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

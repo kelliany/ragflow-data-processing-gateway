@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  # Excel 预处理服务（Python）
+  excel-processor:
+    build:
+      context: ./excel-processor
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # 管理网关（Node）
+  admin-gateway:
+    build:
+      context: ./admin-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - RAGFLOW_BASE_URL=${RAGFLOW_BASE_URL}
+      - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
+      - EXCEL_PROCESSOR_URL=http://excel-processor:5001
+      - ADMIN_GATEWAY_PORT=3001
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-50}
+    depends_on:
+      excel-processor:
+        condition: service_healthy
+    restart: unless-stopped
