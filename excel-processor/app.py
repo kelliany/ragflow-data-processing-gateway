@@ -29,6 +29,17 @@ logger = logging.getLogger(__name__)
 # 配置
 MAX_RAG_ROWS = 1000       # RAG 读取的行数限制 (Markdown)
 MAX_PREVIEW_ROWS = 3000   # 浏览器预览的行数限制 (HTML)
+# ── 新增：健康检查接口 ──────────────────────────────────
+@app.route("/health", methods=["GET"])
+def health():
+    """用于 Docker Healthcheck 探测服务状态"""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": time.time(),
+        "service": "excel-processor"
+    }), 200
+
+# ── 核心逻辑 ──────────────────────────────────────────
 
 def clean_dataframe(df):
     """
