@@ -4,6 +4,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+venv/
 
 # Node.js 项目 (admin-gateway)
 admin-gateway/node_modules/
