@@ -33,16 +33,18 @@ services:
 
   # MCP 服务（新增）
   mcp-service:
-    build:
-      context: ./mcp-service
-      dockerfile: Dockerfile
+    build: ./mcp-service
+    container_name: mcp-bridge
+    # 必须映射端口，外部才能访问 SSE 服务
     ports:
       - "5000:5000"
+    env_file: .env
     environment:
-      - MCP_PORT=5000
+      - PYTHONUNBUFFERED=1
     restart: unless-stopped
+    # 既然是 Web 服务了，健康检查现在非常有用
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 10s
       retries: 3
