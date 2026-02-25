@@ -197,10 +197,10 @@ def process_single_sheet_task(sheet_name, df):
             </script>
         </div>
         """
-        return sheet_name, sheet_fragment
+        return sheet_name, sheet_fragment, safe_sheet_id
 
     except Exception as e:
-        return sheet_name, f"<div class='error'>Sheet: {sheet_name} 处理失败: {str(e)}</div>"
+        return sheet_name, f"<div class='error'>Sheet: {sheet_name} 处理失败: {str(e)}</div>", f"error_{uuid.uuid4().hex[:8]}"
 
 def excel_to_html_fast(file_bytes, filename):
     start_time = time.time()
@@ -225,13 +225,13 @@ def excel_to_html_fast(file_bytes, filename):
             futures = {executor.submit(process_single_sheet_task, name, df): name for name, df in dfs.items()}
             for future in futures:
                 try:
-                    name, content = future.result()
-                    if content: results[name] = content
+                    name, content, sheet_id = future.result()
+                    if content: results[name] = (content, sheet_id)
                 except Exception: pass
     else:
         for name, df in dfs.items():
-            _, content = process_single_sheet_task(name, df)
-            if content: results[name] = content
+            _, content, sheet_id = process_single_sheet_task(name, df)
+            if content: results[name] = (content, sheet_id)
 
     logger.info(f"转换耗时: {time.time() - start_time:.2f}s")
     return results
@@ -252,15 +252,16 @@ def process():
         toc_html += "<h3>📂 文件目录 (点击跳转)</h3><ul>"
         rag_toc = "# 文件全书目录\n" # 给 RAG 用的
         
-        for name in sheets_data.keys():
-            toc_html += f"<li>{name}</li>"
+        for name, sheet_info in sheets_data.items():
+            sheet_fragment, safe_sheet_id = sheet_info
+            toc_html += f"<li><a href='#{safe_sheet_id}' style='text-decoration: none; color: #2563eb;'>{name}</a></li>"
             rag_toc += f"- {name}\n"
-            
+        
         toc_html += "</ul></div>"
         
         # 🟢 2. 拼接所有 Sheet 片段
         separator = "\n<hr class='sheet-separator'>\n"
-        combined_body = separator.join(sheets_data.values())
+        combined_body = separator.join([sheet_info[0] for sheet_info in sheets_data.values()])
         
         # 🟢 3. 构建唯一的全局 HTML 外壳 (解决乱码的关键！)
         final_html = f"""<!DOCTYPE html>
