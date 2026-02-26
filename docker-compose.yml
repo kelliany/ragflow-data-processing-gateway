@@ -6,13 +6,16 @@ services:
       dockerfile: Dockerfile
     ports:
       - "5001:5001"
+    # 【新增】挂载卷：确保存储的原始文件持久化
+    volumes:
+      - ./data/uploads:/app/data/uploads
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:5001/health"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s  # 【关键】延长初始等待时间，确保 4 个 Worker 全部就绪
+      start_period: 30s 
 
   # 管理网关（Node）
   admin-gateway:
@@ -31,18 +34,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # MCP 服务（新增）
+  # MCP 服务（保持不变）
   mcp-service:
     build: ./mcp-service
     container_name: mcp-bridge
-    # 必须映射端口，外部才能访问 SSE 服务
     ports:
       - "5000:5000"
     env_file: .env
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
-    # 既然是 Web 服务了，健康检查现在非常有用
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s

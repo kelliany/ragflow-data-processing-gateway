@@ -17,7 +17,22 @@ if (!RAGFLOW_URL) {
 // ── 1. Excel 拦截中间件（优先于反向代理）──────────────
 // 只处理 POST /api/v1/datasets/:id/documents 且包含 Excel 的请求
 app.use(createExcelInterceptor(RAGFLOW_URL, PROCESSOR_URL));
-
+// 逻辑：所有发往 3001/api/download 的请求，全部转给后端的 5001 处理
+app.use('/api/download', createProxyMiddleware({
+    target: PROCESSOR_URL || 'http://excel-processor:5001',
+    changeOrigin: true,
+    // 关键：对路径进行转发，不改变路径结构
+    pathRewrite: {
+        '^/api/download': '/api/download', 
+    },
+    // 增加日志方便调试
+    onProxyReq: (proxyReq, req, res) => {
+        console.log(`[Gateway Proxy] 正在转发到后端: ${req.url}`);
+    },
+    onProxyRes: (proxyRes, req, res) => {
+        console.log(`[Gateway Proxy] 后端返回状态: ${proxyRes.statusCode}`);
+    }
+}));
 // ── 2. 其余所有请求透传给 RAGFlow ────────────────────
 app.use(
   '/',
