@@ -17,6 +17,7 @@ import warnings
 import base64
 import re
 import uuid
+import hashlib
 import os
 from urllib.parse import unquote
 from concurrent.futures import ProcessPoolExecutor
@@ -28,7 +29,13 @@ app.config['JSON_AS_ASCII'] = False
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
+def generate_sheet_id(name, index):
+    # 1. 清洗名称：去掉 HTML 不支持的特殊符号（如空格、括号、点）
+    # 这样 "角色分布图(8.17)" 变成 "角色分布图_8_17"
+    safe_name = re.sub(r'[^\w\u4e00-\u9fa5]', '_', name)
+    
+    # 2. 加上物理索引前缀，确保绝对唯一
+    return f"sheet_{index}_{safe_name}"
 # 数据限制
 MAX_RAG_ROWS = 1000 
 MAX_PREVIEW_ROWS = 3000 
@@ -86,16 +93,17 @@ def clean_dataframe(df):
         logger.error(f"Clean Error: {e}")
         return df
 
-def process_single_sheet_task(sheet_name, df, download_url, unique_filename):
+def process_single_sheet_task(sheet_name, df, download_url, unique_filename,idx):
     """子进程任务：生成 Sheet 的 HTML 片段"""
     try:
         df = clean_dataframe(df)
         if df is None or df.empty: return None
 
         # 锚点 ID：用于前端直接定位跳转
-        unique_id = uuid.uuid4().hex[:8]
-        safe_sheet_id = f"sheet_{unique_id}"
-
+        # unique_id = uuid.uuid4().hex[:8]
+        # safe_sheet_id = f"sheet_{unique_id}"
+        safe_sheet_id = generate_sheet_id(sheet_name, idx)
+        
         # 1. RAG 语义注入层
         rag_df = df.head(MAX_RAG_ROWS)
         md_content = rag_df.to_markdown(index=False, tablefmt="pipe")
@@ -145,8 +153,9 @@ def process_single_sheet_task(sheet_name, df, download_url, unique_filename):
         return sheet_name, f"<div>Error: {str(e)}</div>", "err"
 
 def excel_to_html_fast(file_bytes, download_url, unique_filename):
-    """并行调度器：处理所有 Sheet 并返回映射关系"""
+    """并行调度器：修正 ID 生成逻辑以适配 RAG 检索"""
     try:
+        # 加上 engine 确保读取稳定
         dfs = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, header=None)
     except Exception as e:
         logger.error(f"Excel 读取失败: {e}")
@@ -154,17 +163,34 @@ def excel_to_html_fast(file_bytes, download_url, unique_filename):
 
     results = {}
     sheet_mapping = {}
+    
     with ProcessPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(process_single_sheet_task, name, df, download_url, unique_filename): name for name, df in dfs.items()}
+        # 修改点：将原有的 name 和 df 提交。
+        # 核心逻辑：在 process_single_sheet_task 内部通过 name 生成唯一的 safe_sheet_id
+        futures = {
+            executor.submit(process_single_sheet_task, name, df, download_url, unique_filename,i): name 
+            for i, (name, df) in enumerate(dfs.items())
+        }
+        
         for f in futures:
-            res = f.result()
-            if res:
-                results[res[0]] = (res[1], res[2])
-                sheet_mapping[res[0]] = res[2] # 保存 {Sheet名: ID} 供 AI 跳转
+            try:
+                # res 结构: (sheet_name, html_fragment, safe_sheet_id)
+                res = f.result()
+                if res:
+                    sheet_name, fragment, safe_id = res
+                    results[sheet_name] = (fragment, safe_id)
+                    
+                    # 关键修改：sheet_mapping 需要存储“包含索引的可能名称”
+                    # 这样无论 AI 提取到的是明文还是带括号的，都能映射到这个 safe_id
+                    sheet_mapping[sheet_name] = safe_id
+            except Exception as e:
+                logger.error(f"子进程执行失败: {e}")
+                
     return results, sheet_mapping
 
 # ── 主解析接口 ────────────────────────────────────────
 
+@app.route("/process", methods=["POST"])
 @app.route("/process", methods=["POST"])
 def process():
     if "file" not in request.files:
@@ -179,16 +205,18 @@ def process():
     with open(save_path, "wb") as f:
         f.write(file_content)
 
-    # 网关转发地址 (3001 为管理网关端口)
+    # 网关转发地址
     download_url = f"http://10.215.208.79:3001/api/download/{unique_filename}"
 
     try:
-        # 1. 启动解析
+        # 1. 启动解析 (注意：excel_to_html_fast 内部必须使用我们约定的 safe_id 生成逻辑)
         sheets_data, sheet_mapping = excel_to_html_fast(file_content, download_url, unique_filename)
         
         # 2. 生成目录 TOC
         toc_html = "<div class='file-toc'><h3>📂 文件目录 (点击跳转)</h3><ul>"
         rag_toc = f"# 文件全书目录\n**溯源下载**: {download_url}\n"
+        
+        # 这里使用逻辑：name 是包含括号的完整名，sheet_id 是后端生成的 safe_id
         for name, (content, sheet_id) in sheets_data.items():
             toc_html += f"<li><a href='#{sheet_id}'>{name}</a></li>"
             rag_toc += f"- {name}\n"
@@ -197,7 +225,7 @@ def process():
         # 3. 拼接 Body
         combined_body = "\n<hr class='sep'>\n".join([v[0] for v in sheets_data.values()])
         
-        # 4. 最终 HTML 包装 (含 CSS 锚点高亮与自动滚动脚本)
+        # 4. 最终 HTML 包装 (重点修改：增加了对“中文/特殊字符 ID”的平滑处理)
         final_html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -207,7 +235,7 @@ def process():
     .file-toc {{ background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #cbd5e1; margin-bottom: 25px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
     .toc-footer {{ margin-top:10px; padding-top:10px; border-top:1px solid #eee; font-weight:bold; }}
     .sheet-container {{ background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 30px; transition: 0.3s; }}
-    /* 锚点跳转后的高亮效果 */
+    /* 锚点跳转高亮样式 */
     .sheet-container:target {{ border: 2px solid #2563eb; background-color: #eff6ff; scroll-margin-top: 20px; }}
     .sheet-title {{ border-left: 4px solid #2563eb; padding-left: 12px; font-size: 18px; color: #0f172a; display: flex; justify-content: space-between; }}
     .download-btn {{ font-size: 12px; color: #2563eb; text-decoration: none; font-weight: normal; }}
@@ -222,13 +250,37 @@ def process():
     {toc_html}
     {combined_body}
     <script>
-        // 自动定位逻辑：若 URL 含有 #sheet_xxx，页面加载后自动平滑滚动
-        window.onload = function() {{
-            if(window.location.hash) {{
-                var el = document.getElementById(window.location.hash.substring(1));
-                if(el) el.scrollIntoView({{behavior: "smooth"}});
+        function doScrollJump() {{
+            // decodeURIComponent 处理中文哈希，substring(1) 去掉 #
+            const rawHash = decodeURIComponent(window.location.hash.substring(1));
+            if(!rawHash) return;
+
+            // 1. 尝试直接获取 (针对 ID 完全一致的情况)
+            let el = document.getElementById(rawHash);
+
+            // 2. 模糊匹配 (针对 AI 提取名称不全或括号处理不一致的情况)
+            if(!el) {{
+                const cleanKey = rawHash.replace('sheet_', '');
+                const containers = document.querySelectorAll('.sheet-container');
+                for (let container of containers) {{
+                    const title = container.querySelector('.sheet-title').innerText;
+                    if (title.includes(cleanKey)) {{
+                        el = container;
+                        break;
+                    }}
+                }}
             }}
-        }};
+
+            if(el) {{
+                // 延迟执行以确保表格渲染完成（防止高度塌陷）
+                setTimeout(() => {{
+                    el.scrollIntoView({{behavior: "smooth", block: "start"}});
+                }}, 150);
+            }}
+        }}
+
+        window.onload = doScrollJump;
+        window.onhashchange = doScrollJump;
     </script>
 </body>
 </html>"""
@@ -237,7 +289,7 @@ def process():
             "filename": file.filename,
             "download_url": download_url,
             "combined": final_html,
-            "sheet_offsets": sheet_mapping # 关键：返回给 AI 的锚点字典
+            "sheet_offsets": sheet_mapping 
         })
     except Exception as e:
         logger.error(str(e))
