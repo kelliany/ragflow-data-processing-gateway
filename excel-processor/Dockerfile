@@ -24,4 +24,12 @@ COPY . .
 
 EXPOSE 5001
 
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5001", "--timeout", "120", "app:app"]
+CMD ["gunicorn", \
+     "-w", "4", \
+     "-b", "0.0.0.0:5001", \
+     "--timeout", "120", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-", \
+     "--log-level", "debug", \
+     "--capture-output", \
+     "app:app"]

@@ -13,42 +13,37 @@ if (!RAGFLOW_URL) {
   console.error('[gateway] 错误: 缺少 RAGFLOW_BASE_URL 环境变量');
   process.exit(1);
 }
-
-// ── 1. Excel 拦截中间件（优先于反向代理）──────────────
-// 只处理 POST /api/v1/datasets/:id/documents 且包含 Excel 的请求
-app.use(createExcelInterceptor(RAGFLOW_URL, PROCESSOR_URL));
-// 逻辑：所有发往 3001/api/download 的请求，全部转给后端的 5001 处理
+// ── 1. 最优先：强制拦截下载请求 ────────────────────────
+// 放在所有中间件的最前面，确保流量第一时间被分流到 5001
 app.use('/api/download', createProxyMiddleware({
     target: PROCESSOR_URL || 'http://excel-processor:5001',
     changeOrigin: true,
-    // 关键：对路径进行转发，不改变路径结构
     pathRewrite: {
-        '^/api/download': '/api/download', 
+        '^/api/download': '/',  // 将 /api/download 改写为 /download 发给后端
     },
-    // 增加日志方便调试
     onProxyReq: (proxyReq, req, res) => {
-        console.log(`[Gateway Proxy] 正在转发到后端: ${req.url}`);
-    },
-    onProxyRes: (proxyRes, req, res) => {
-        console.log(`[Gateway Proxy] 后端返回状态: ${proxyRes.statusCode}`);
+        console.log(`[Gateway] 转发中: ${req.originalUrl} -> ${proxyReq.path}`);
     }
 }));
-// ── 2. 其余所有请求透传给 RAGFlow ────────────────────
+
+// ── 2. 其次：Excel 上传拦截中间件 ──────────────────────
+// 确保这个中间件内部只对 POST /v1/document/upload 动作做处理
+// 并且在其他所有情况下都必须执行 next()
+app.use(createExcelInterceptor(RAGFLOW_URL, PROCESSOR_URL));
+
+// ── 3. 最后：兜底透传 RAGFlow ────────────────────────
 app.use(
   '/',
   createProxyMiddleware({
     target: RAGFLOW_URL,
     changeOrigin: true,
-    // WebSocket 支持（RAGFlow 对话流式输出用到）
     ws: true,
-    on: {
-      error: (err, req, res) => {
-        console.error('[proxy] 转发错误:', err.message);
-        if (res && !res.headersSent) {
-          res.status(502).json({ error: '代理转发失败', detail: err.message });
+    onProxyReq: (proxyReq, req, res) => {
+        // 如果漏到了这里，说明前面的 /api/download 没接住
+        if (req.url.includes('/api/download')) {
+            console.warn(`[Proxy-Warning] 下载请求漏到了 RAGFlow 层: ${req.url}`);
         }
-      },
-    },
+    }
   })
 );
 

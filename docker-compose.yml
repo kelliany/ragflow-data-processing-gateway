@@ -9,6 +9,8 @@ services:
     # 【新增】挂载卷：确保存储的原始文件持久化
     volumes:
       - ./data/uploads:/app/data/uploads
+    environment:
+      - UPLOAD_FOLDER=/app/data/uploads
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:5001/health"]

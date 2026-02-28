@@ -51,7 +51,8 @@ def health():
     """用于 Docker 存活探针"""
     return jsonify({"status": "healthy", "service": "excel-processor"}), 200
 
-@app.route("/api/download/<path:filename>", methods=["GET"])
+# --- 修改后 ---
+@app.route("/<filename>", methods=["GET","HEAD"]) # 移除 /api 前缀，移除 path:
 def download_file(filename):
     """
     物理文件下载：
@@ -190,7 +191,6 @@ def excel_to_html_fast(file_bytes, download_url, unique_filename):
 
 # ── 主解析接口 ────────────────────────────────────────
 
-@app.route("/process", methods=["POST"])
 @app.route("/process", methods=["POST"])
 def process():
     if "file" not in request.files:
